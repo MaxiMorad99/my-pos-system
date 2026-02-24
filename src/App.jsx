@@ -7,7 +7,7 @@ import POSPage from './pages/POSPage';
 import SalesPage from './pages/SalesPage';
 import ProductsPage from './pages/ProductsPage';
 import DashboardPage from './pages/DashboardPage';
-
+import LoginPage from './pages/LoginPage';
 import SettingsPage from './pages/SettingsPage';
 
 // NAVBAR INTEGRADO Y SEGURO
