@@ -97,12 +97,13 @@ const POSPage = () => {
     setCart(cart.map(item => item.id === id ? { ...item, quantity: newQuantity } : item));
   };
 
-  // --- COBRAR ---
+  // --- COBRAR Y GENERAR NÚMERO DE TICKET ---
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     if (!orgId) return alert("Error de seguridad: No se detectó tu empresa."); 
 
     try {
+      // 1. Guardar Venta
       const { data: saleData, error: saleError } = await supabase
         .from('sales')
         .insert([{ 
@@ -114,26 +115,41 @@ const POSPage = () => {
 
       if (saleError) throw saleError;
 
+      // 2. Guardar Items (AHORA CON ORGANIZACIÓN Y CONTROL DE ERRORES)
       for (const item of cart) {
-        await supabase.from('sale_items').insert([{
+        const { error: itemError } = await supabase.from('sale_items').insert([{
           sale_id: saleData.id,
           product_id: item.id,
           quantity: item.quantity,
-          price: item.price_sell
+          price: item.price_sell,
+          organization_id: orgId // <--- ESTO FALTABA PARA QUE NO LOS RECHACE
         }]);
+
+        if (itemError) {
+          console.error("Error guardando detalle:", itemError);
+          throw new Error("No se pudo guardar un producto: " + itemError.message);
+        }
 
         const currentProduct = products.find(p => p.id === item.id);
         const newStock = currentProduct.stock_current - item.quantity;
         await supabase.from('products').update({ stock_current: newStock }).eq('id', item.id);
       }
 
-      handlePrint(saleData.id); // Pasamos el ID de la venta
+      // 3. Contar ventas y generar ticket
+      const { count } = await supabase
+        .from('sales')
+        .select('*', { count: 'exact', head: true })
+        .eq('organization_id', orgId);
+
+      const sequentialNum = count || 1;
+      
+      handlePrint(sequentialNum); 
       setCart([]);
       fetchData(orgId); 
       alert('¡Venta Exitosa!');
 
     } catch (error) {
-      alert('Error: ' + error.message);
+      alert('Error al cobrar: ' + error.message);
     }
   };
 
