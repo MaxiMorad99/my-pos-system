@@ -6,18 +6,17 @@ const POSPage = () => {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [storeData, setStoreData] = useState(null);
-  const [orgId, setOrgId] = useState(null); // <--- NUEVO: Estado para el ID de la empresa
+  const [orgId, setOrgId] = useState(null); 
   
   // Estados de Carrito y Filtros
   const [cart, setCart] = useState([]);
   const [total, setTotal] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState(null); // Categoría Principal
-  const [selectedSubCategory, setSelectedSubCategory] = useState(null); // Subcategoría
+  const [selectedCategory, setSelectedCategory] = useState(null); 
+  const [selectedSubCategory, setSelectedSubCategory] = useState(null); 
 
   // --- 1. CARGA INICIAL ---
   useEffect(() => {
-    // Primero obtenemos el usuario y su organización
     const initPOS = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser();
@@ -30,7 +29,6 @@ const POSPage = () => {
             
           if (profile && profile.organization_id) {
             setOrgId(profile.organization_id);
-            // Solo cargamos los datos si tenemos el ID de la empresa
             await fetchData(profile.organization_id);
           }
         }
@@ -49,7 +47,7 @@ const POSPage = () => {
   }, [cart]);
 
   const fetchData = async (organizationId) => {
-    // 1. Datos de la Tienda (para el ticket) - Filtrado por org_id
+    // 1. Datos de la Tienda (para el ticket)
     const { data: store } = await supabase
       .from('store_settings')
       .select('*')
@@ -57,7 +55,7 @@ const POSPage = () => {
       .single();
     if (store) setStoreData(store);
 
-    // 2. Categorías - Filtrado por org_id
+    // 2. Categorías
     const { data: cats } = await supabase
       .from('categories')
       .select('*')
@@ -65,12 +63,12 @@ const POSPage = () => {
       .order('name');
     if (cats) setCategories(cats);
 
-    // 3. Productos - Filtrado por org_id
+    // 3. Productos 
     const { data: prods } = await supabase
       .from('products')
-      .select('*, categories(id, parent_id)') // Traemos ID y Padre de la categoría
+      .select('*, categories(id, parent_id)') 
       .eq('organization_id', organizationId)
-      .gt('stock_current', 0) // Solo stock positivo
+      .gt('stock_current', 0) 
       .order('name');
       
     if (prods) setProducts(prods);
@@ -102,22 +100,20 @@ const POSPage = () => {
   // --- COBRAR ---
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    if (!orgId) return alert("Error de seguridad: No se detectó tu empresa."); // Protección
+    if (!orgId) return alert("Error de seguridad: No se detectó tu empresa."); 
 
     try {
-      // 1. Guardar Venta (AHORA CON organization_id)
       const { data: saleData, error: saleError } = await supabase
         .from('sales')
         .insert([{ 
           total: total,
-          organization_id: orgId // <--- ¡AQUÍ ESTÁ LA MAGIA QUE FALTABA!
+          organization_id: orgId 
         }]) 
         .select()
         .single();
 
       if (saleError) throw saleError;
 
-      // 2. Guardar Items y Descontar Stock
       for (const item of cart) {
         await supabase.from('sale_items').insert([{
           sale_id: saleData.id,
@@ -131,9 +127,9 @@ const POSPage = () => {
         await supabase.from('products').update({ stock_current: newStock }).eq('id', item.id);
       }
 
-      handlePrint(); 
+      handlePrint(saleData.id); // Pasamos el ID de la venta
       setCart([]);
-      fetchData(orgId); // Recargar stock pasando el ID
+      fetchData(orgId); 
       alert('¡Venta Exitosa!');
 
     } catch (error) {
@@ -141,63 +137,122 @@ const POSPage = () => {
     }
   };
 
-  const handlePrint = () => {
-    const storeName = storeData?.name || "Mi Tienda";
-    const storeAddress = storeData?.address || "";
-    const storePhone = storeData?.phone || "";
+  // --- GENERADOR DE TICKET TÉRMICO PROFESIONAL ---
+  const handlePrint = (saleId) => {
+    // Extraemos los datos de la tienda, con valores por defecto si faltan
+    const storeName = storeData?.name || "MI TIENDA";
+    const legalName = storeData?.legal_name || storeName;
+    const cuit = storeData?.cuit || "00-00000000-0";
+    const taxCat = storeData?.tax_category || "Consumidor Final";
+    const address = storeData?.address || "Dirección no configurada";
+    const phone = storeData?.phone || "Sin teléfono";
+    
+    // Generamos un N° de Ticket basado en la fecha (Ej: 20260226-0012)
+    const now = new Date();
+    const dateString = now.toLocaleDateString();
+    const timeString = now.toLocaleTimeString();
+    const ticketNumber = `${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}-${saleId.toString().padStart(4, '0')}`;
 
-    const printWindow = window.open('', '', 'width=400,height=600');
+    const printWindow = window.open('', '', 'width=350,height=600');
     printWindow.document.write(`
       <html>
         <head>
-          <title>Ticket</title>
+          <title>Ticket #${ticketNumber}</title>
           <style>
-            body { font-family: 'Courier New', monospace; text-align: center; font-size: 12px; margin: 0; padding: 10px; }
-            .header { margin-bottom: 10px; border-bottom: 1px dashed black; padding-bottom: 10px; }
-            .store-name { font-size: 16px; font-weight: bold; text-transform: uppercase; }
-            .item { display: flex; justify-content: space-between; margin: 5px 0; }
-            .total { font-size: 16px; font-weight: bold; margin-top: 15px; border-top: 1px dashed black; padding-top: 10px; }
+            /* Estilos optimizados para impresora térmica de 80mm */
+            @page { margin: 0; }
+            body { 
+              font-family: 'Courier New', Courier, monospace; 
+              width: 80mm; 
+              margin: 0 auto; 
+              padding: 5mm; 
+              font-size: 12px; 
+              line-height: 1.2;
+              color: #000;
+            }
+            .text-center { text-align: center; }
+            .text-left { text-align: left; }
+            .text-right { text-align: right; }
+            .font-bold { font-weight: bold; }
+            .text-lg { font-size: 16px; }
+            .text-xl { font-size: 18px; }
+            .divider { border-bottom: 1px dashed #000; margin: 5px 0; }
+            .item-row { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 3px; }
+            .item-name { flex: 1; padding-right: 5px; }
+            .item-total { width: 60px; text-align: right; }
           </style>
         </head>
         <body>
-          <div class="header">
-            <div class="store-name">${storeName}</div>
-            <div>${storeAddress}</div>
-            <div>Tel: ${storePhone}</div>
-            <br/>
-            <div>${new Date().toLocaleString()}</div>
+          <div class="text-center font-bold text-xl">${storeName}</div>
+          <div class="text-center">${legalName}</div>
+          <div class="text-center">CUIT: ${cuit}</div>
+          <div class="text-center">IVA: ${taxCat}</div>
+          <div class="text-center">${address}</div>
+          <div class="text-center">Tel: ${phone}</div>
+          
+          <div class="divider"></div>
+          
+          <div class="text-left font-bold">COMPROBANTE NO FISCAL</div>
+          <div class="text-left">TICKET N°: ${ticketNumber}</div>
+          <div class="text-left">FECHA: ${dateString} ${timeString}</div>
+          
+          <div class="divider"></div>
+          
+          <div class="item-row font-bold">
+            <span class="item-name">DESCRIPCION (CANT)</span>
+            <span class="item-total">TOTAL</span>
           </div>
-          <div class="items">
-            ${cart.map(item => `
-              <div class="item">
-                <span>${item.name} x${item.quantity}</span>
-                <span>$${(item.price_sell * item.quantity).toFixed(2)}</span>
-              </div>
-            `).join('')}
+          
+          <div class="divider"></div>
+          
+          ${cart.map(item => `
+            <div class="item-row">
+              <span class="item-name">${item.name} (x${item.quantity})</span>
+              <span class="item-total">$${(item.price_sell * item.quantity).toFixed(2)}</span>
+            </div>
+            <div class="text-left" style="font-size: 10px; color: #444; margin-bottom: 5px;">
+              P. Unit: $${parseFloat(item.price_sell).toFixed(2)}
+            </div>
+          `).join('')}
+          
+          <div class="divider"></div>
+          
+          <div class="item-row font-bold text-lg" style="margin-top: 10px;">
+            <span>TOTAL A PAGAR:</span>
+            <span>$${total.toFixed(2)}</span>
           </div>
-          <div class="total">TOTAL: $${total.toFixed(2)}</div>
+          
+          <div class="divider"></div>
+          
+          <div class="text-center" style="margin-top: 15px;">
+            ¡Gracias por su compra!
+          </div>
+          <div class="text-center" style="margin-top: 5px; font-size: 10px;">
+            Documento válido como remito interno.
+          </div>
+          
+          <script>
+            window.onload = function() {
+              window.print();
+              setTimeout(function(){ window.close(); }, 500);
+            }
+          </script>
         </body>
       </html>
     `);
     printWindow.document.close();
-    printWindow.print();
   };
 
   // --- FILTRADO INTELIGENTE ---
   const filteredProducts = products.filter(p => {
-    // 1. Filtro por Texto (Buscador)
     const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           (p.barcode && p.barcode.includes(searchTerm));
-    
-    // 2. Filtro por Categoría
     let matchesCategory = true;
-    
     if (selectedSubCategory) {
       matchesCategory = p.category_id === selectedSubCategory;
     } else if (selectedCategory) {
       matchesCategory = p.category_id === selectedCategory || p.categories?.parent_id === selectedCategory;
     }
-
     return matchesSearch && matchesCategory;
   });
 
