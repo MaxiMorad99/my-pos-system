@@ -6,6 +6,7 @@ const POSPage = () => {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [storeData, setStoreData] = useState(null);
+  const [orgId, setOrgId] = useState(null); // <--- NUEVO: Estado para el ID de la empresa
   
   // Estados de Carrito y Filtros
   const [cart, setCart] = useState([]);
@@ -16,7 +17,29 @@ const POSPage = () => {
 
   // --- 1. CARGA INICIAL ---
   useEffect(() => {
-    fetchData();
+    // Primero obtenemos el usuario y su organización
+    const initPOS = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('organization_id')
+            .eq('id', user.id)
+            .single();
+            
+          if (profile && profile.organization_id) {
+            setOrgId(profile.organization_id);
+            // Solo cargamos los datos si tenemos el ID de la empresa
+            await fetchData(profile.organization_id);
+          }
+        }
+      } catch (error) {
+        console.error("Error inicializando POS:", error);
+      }
+    };
+
+    initPOS();
   }, []);
 
   // --- 2. CALCULAR TOTAL ---
@@ -25,19 +48,28 @@ const POSPage = () => {
     setTotal(newTotal);
   }, [cart]);
 
-  const fetchData = async () => {
-    // 1. Datos de la Tienda (para el ticket)
-    const { data: store } = await supabase.from('store_settings').select('*').single();
+  const fetchData = async (organizationId) => {
+    // 1. Datos de la Tienda (para el ticket) - Filtrado por org_id
+    const { data: store } = await supabase
+      .from('store_settings')
+      .select('*')
+      .eq('organization_id', organizationId)
+      .single();
     if (store) setStoreData(store);
 
-    // 2. Categorías
-    const { data: cats } = await supabase.from('categories').select('*').order('name');
+    // 2. Categorías - Filtrado por org_id
+    const { data: cats } = await supabase
+      .from('categories')
+      .select('*')
+      .eq('organization_id', organizationId)
+      .order('name');
     if (cats) setCategories(cats);
 
-    // 3. Productos (Con info de su categoría para poder filtrar)
+    // 3. Productos - Filtrado por org_id
     const { data: prods } = await supabase
       .from('products')
       .select('*, categories(id, parent_id)') // Traemos ID y Padre de la categoría
+      .eq('organization_id', organizationId)
       .gt('stock_current', 0) // Solo stock positivo
       .order('name');
       
@@ -67,14 +99,19 @@ const POSPage = () => {
     setCart(cart.map(item => item.id === id ? { ...item, quantity: newQuantity } : item));
   };
 
-  // --- COBRAR (Lógica corregida con 'total' y 'price') ---
+  // --- COBRAR ---
   const handleCheckout = async () => {
     if (cart.length === 0) return;
+    if (!orgId) return alert("Error de seguridad: No se detectó tu empresa."); // Protección
+
     try {
-      // 1. Guardar Venta
+      // 1. Guardar Venta (AHORA CON organization_id)
       const { data: saleData, error: saleError } = await supabase
         .from('sales')
-        .insert([{ total: total }]) 
+        .insert([{ 
+          total: total,
+          organization_id: orgId // <--- ¡AQUÍ ESTÁ LA MAGIA QUE FALTABA!
+        }]) 
         .select()
         .single();
 
@@ -96,7 +133,7 @@ const POSPage = () => {
 
       handlePrint(); 
       setCart([]);
-      fetchData(); // Recargar stock
+      fetchData(orgId); // Recargar stock pasando el ID
       alert('¡Venta Exitosa!');
 
     } catch (error) {
@@ -156,18 +193,14 @@ const POSPage = () => {
     let matchesCategory = true;
     
     if (selectedSubCategory) {
-      // Si hay subcategoría seleccionada, debe coincidir exacta
       matchesCategory = p.category_id === selectedSubCategory;
     } else if (selectedCategory) {
-      // Si hay Categoría Padre seleccionada, mostramos sus productos directos Y los de sus hijos
-      // (p.category_id es igual al padre O la categoría del producto tiene como padre al seleccionado)
       matchesCategory = p.category_id === selectedCategory || p.categories?.parent_id === selectedCategory;
     }
 
     return matchesSearch && matchesCategory;
   });
 
-  // Sepamos cuáles son padres y cuáles hijos para pintar los botones
   const mainCategories = categories.filter(c => !c.parent_id);
   const subCategories = selectedCategory ? categories.filter(c => c.parent_id === selectedCategory) : [];
 
@@ -179,7 +212,6 @@ const POSPage = () => {
         
         {/* BARRA SUPERIOR: Buscador + Categorías */}
         <div className="bg-white p-4 shadow-sm z-10">
-          {/* Buscador */}
           <input 
             type="text" 
             placeholder="🔍 Buscar producto o escanear..." 
@@ -188,7 +220,6 @@ const POSPage = () => {
             onChange={(e) => setSearchTerm(e.target.value)}
           />
 
-          {/* Pestañas de Categorías (Scroll Horizontal) */}
           <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
             <button 
               onClick={() => { setSelectedCategory(null); setSelectedSubCategory(null); }}
@@ -207,7 +238,6 @@ const POSPage = () => {
             ))}
           </div>
 
-          {/* Subcategorías (Solo si hay padre seleccionado y tiene hijos) */}
           {subCategories.length > 0 && (
             <div className="flex gap-2 overflow-x-auto mt-2 pt-2 border-t border-gray-100 animate-fadeIn">
               <span className="text-xs font-bold text-gray-400 py-2 self-center">Filtrar:</span>
@@ -224,7 +254,7 @@ const POSPage = () => {
           )}
         </div>
 
-        {/* GRILLA DE PRODUCTOS (Scrollable) */}
+        {/* GRILLA DE PRODUCTOS */}
         <div className="flex-1 overflow-y-auto p-4">
           {filteredProducts.length === 0 ? (
             <div className="text-center text-gray-400 mt-10">
@@ -255,7 +285,7 @@ const POSPage = () => {
         </div>
       </div>
 
-      {/* DERECHA: CARRITO (Igual que antes pero responsive) */}
+      {/* DERECHA: CARRITO */}
       <div className="w-full md:w-1/3 bg-white border-t md:border-t-0 md:border-l border-gray-200 flex flex-col h-1/2 md:h-full shadow-2xl z-20">
         <div className="p-4 bg-indigo-900 text-white shadow-md flex justify-between items-center">
           <div>
