@@ -21,6 +21,11 @@ const ProductsPage = () => {
     name: '', parent_id: ''
   });
 
+  // --- GENERADOR DE CÓDIGO DE BARRAS ---
+  const generarCodigoBarras = () => {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+  };
+
   // --- CARGA DE DATOS ---
   useEffect(() => {
     // 1. PRIMERO: Obtener el ID de la Organización del usuario actual
@@ -118,7 +123,15 @@ const ProductsPage = () => {
         category_id: product.category_id || ''
       });
     } else {
-      setProductForm({ name: '', barcode: '', cost_price: '', price_sell: '', stock_current: '', category_id: '' });
+      // Al ser nuevo, generamos automáticamente el código de barras
+      setProductForm({ 
+        name: '', 
+        barcode: generarCodigoBarras(), 
+        cost_price: '', 
+        price_sell: '', 
+        stock_current: '', 
+        category_id: '' 
+      });
     }
     setShowProductModal(true);
   };
@@ -245,11 +258,25 @@ const ProductsPage = () => {
                   ))}
                 </select>
               </div>
+              
+              {/* AQUÍ VAN LOS SIGNOS DE $ */}
               <div className="grid grid-cols-2 gap-3">
-                <input name="cost_price" type="number" step="0.01" value={productForm.cost_price} onChange={handleProductChange} placeholder="Costo $" className="w-full p-3 border rounded-lg" />
-                <input name="price_sell" type="number" step="0.01" value={productForm.price_sell} onChange={handleProductChange} placeholder="Venta $" className="w-full p-3 border border-green-300 font-bold text-green-700" required />
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <span className="text-gray-500 font-bold">$</span>
+                  </div>
+                  <input name="cost_price" type="number" step="0.01" value={productForm.cost_price} onChange={handleProductChange} placeholder="Costo" className="w-full pl-8 p-3 border rounded-lg" />
+                </div>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <span className="text-gray-500 font-bold">$</span>
+                  </div>
+                  <input name="price_sell" type="number" step="0.01" value={productForm.price_sell} onChange={handleProductChange} placeholder="Venta" className="w-full pl-8 p-3 border border-green-300 font-bold text-green-700" required />
+                </div>
               </div>
+              
               <input name="stock_current" type="number" value={productForm.stock_current} onChange={handleProductChange} placeholder="Stock Inicial" className="w-full p-3 border rounded-lg" required />
+              
               <div className="flex gap-3 mt-4">
                 <button type="button" onClick={() => setShowProductModal(false)} className="flex-1 py-3 bg-gray-100 font-bold rounded-lg text-gray-600">Cancelar</button>
                 <button type="submit" className="flex-1 py-3 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700">Guardar</button>
