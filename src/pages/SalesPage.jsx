@@ -21,7 +21,7 @@ const SalesPage = () => {
             .eq('id', user.id)
             .single();
 
-          if (profile?.organization_id) {
+          if (profile && profile.organization_id) {
             setOrgId(profile.organization_id);
             await fetchStoreData(profile.organization_id);
             await fetchSales(profile.organization_id);
@@ -45,7 +45,7 @@ const SalesPage = () => {
     if (data) setStoreData(data);
   };
 
-  // 2. Traer las Ventas con el N° de Ticket Real (receipt_number)
+  // 2. Traer las Ventas con el N° de Ticket Real
   const fetchSales = async (organizationId) => {
     setLoading(true);
     try {
@@ -74,17 +74,16 @@ const SalesPage = () => {
     }
   };
 
-  // 3. Reimprimir Ticket usando el mismo número que se generó en la caja
+  // 3. Reimprimir Ticket (Sintaxis segura sin optional chaining)
   const handleReprint = (sale) => {
-    const storeName = storeData?.name || "MI TIENDA";
-    const legalName = storeData?.legal_name || storeName;
-    const cuit = storeData?.cuit || "00-00000000-0";
-    const taxCat = storeData?.tax_category || "Consumidor Final";
-    const address = storeData?.address || "Dirección no configurada";
-    const phone = storeData?.phone || "Sin teléfono";
+    const storeName = storeData && storeData.name ? storeData.name : "MI TIENDA";
+    const legalName = storeData && storeData.legal_name ? storeData.legal_name : storeName;
+    const cuit = storeData && storeData.cuit ? storeData.cuit : "00-00000000-0";
+    const taxCat = storeData && storeData.tax_category ? storeData.tax_category : "Consumidor Final";
+    const address = storeData && storeData.address ? storeData.address : "Dirección no configurada";
+    const phone = storeData && storeData.phone ? storeData.phone : "Sin teléfono";
 
-    // Tomamos el N° de ticket guardado. Si es viejo y no tiene, le inventamos uno para no romper.
-    const ticketNumber = sale.receipt_number || `0001-${sale.id.replace(/\D/g, '').slice(0, 9).padStart(9, '0')}`;
+    const ticketNumber = sale.receipt_number ? sale.receipt_number : `0001-${sale.id.replace(/\D/g, '').slice(0, 9).padStart(9, '0')}`;
     const date = new Date(sale.created_at);
 
     const printWindow = window.open('', '', 'width=350,height=600');
@@ -118,12 +117,15 @@ const SalesPage = () => {
           <div class="divider"></div>
           <div class="item-row font-bold"><span>DESCRIPCION (CANT)</span><span>TOTAL</span></div>
           <div class="divider"></div>
-          ${(sale.sale_items || []).map(item => `
-            <div class="item-row">
-              <span>${item.products?.name || "Producto"} (x${item.quantity})</span>
-              <span>$${(item.price * item.quantity).toFixed(2)}</span>
-            </div>
-          `).join('')}
+          ${(sale.sale_items || []).map(item => {
+            const productName = item.products && item.products.name ? item.products.name : "Producto";
+            return `
+              <div class="item-row">
+                <span>${productName} (x${item.quantity})</span>
+                <span>$${(item.price * item.quantity).toFixed(2)}</span>
+              </div>
+            `;
+          }).join('')}
           <div class="divider"></div>
           <div class="item-row font-bold text-lg" style="margin-top: 10px;">
             <span>TOTAL:</span><span>$${(sale.total || 0).toFixed(2)}</span>
@@ -145,7 +147,6 @@ const SalesPage = () => {
 
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
         
-        {/* ENCABEZADOS DE TABLA (Agregamos la columna Ticket) */}
         <div className="grid grid-cols-4 bg-gray-50 p-4 border-b font-bold text-gray-600 text-sm uppercase">
           <div>Ticket N°</div>
           <div>Fecha</div>
@@ -163,9 +164,8 @@ const SalesPage = () => {
               <div key={sale.id} className="transition hover:bg-gray-50">
                 <div onClick={() => setExpandedSaleId(expandedSaleId === sale.id ? null : sale.id)} className="grid grid-cols-4 p-4 cursor-pointer items-center group">
                   
-                  {/* NUEVA COLUMNA: NÚMERO DE TICKET */}
                   <div className="text-sm font-bold text-indigo-600">
-                    {sale.receipt_number || "Sin N°"}
+                    {sale.receipt_number ? sale.receipt_number : "Sin N°"}
                   </div>
 
                   <div className="text-sm text-gray-700">
@@ -191,6 +191,27 @@ const SalesPage = () => {
                       </button>
                     </div>
                     <ul className="space-y-2 mb-2">
-                      {sale.sale_items && sale.sale_items.map((item, index) => (
-                        <li key={index} className="flex justify-between text-sm border-b border-indigo-100 pb-1 last:border-0">
-                          <span className="text-gray-700"><span className="font-bold">{item.quantity}x</span> {item.products?.name || "Producto Eliminado"}</span>
+                      {sale.sale_items && sale.sale_items.map((item, index) => {
+                        const productName = item.products && item.products.name ? item.products.name : "Producto Eliminado";
+                        return (
+                          <li key={index} className="flex justify-between text-sm border-b border-indigo-100 pb-1 last:border-0">
+                            <span className="text-gray-700">
+                              <span className="font-bold">{item.quantity}x</span> {productName}
+                            </span>
+                            <span className="text-gray-600 font-bold">${(item.price * item.quantity).toFixed(2)}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default SalesPage;
