@@ -1,175 +1,252 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { useNavigate } from 'react-router-dom';
-import * as XLSX from 'xlsx';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, Legend
+} from 'recharts';
 
 const DashboardPage = () => {
-  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  
-  const [financials, setFinancials] = useState({
-    totalInvested: 0,
-    totalPotential: 0,
-    potentialProfit: 0,
-    stockCount: 0,
-    lowStock: 0
+  const [stats, setStats] = useState({
+    totalRevenue: 0,
+    totalSales: 0,
+    totalItems: 0,
+    averageTicket: 0
   });
+  const [topProducts, setTopProducts] = useState([]);
+  const [salesByRegister, setSalesByRegister] = useState([]);
+  const [recentSales, setRecentSales] = useState([]);
+  const [storeName, setStoreName] = useState("Mi Negocio");
 
-  const [inventoryList, setInventoryList] = useState([]);
+  // Paleta de colores para los gráficos
+  const COLORS = ['#4f46e5', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6'];
 
   useEffect(() => {
-    fetchData();
+    const fetchDashboardData = async () => {
+      setLoading(true);
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('organization_id')
+          .eq('id', user.id)
+          .single();
+
+        if (!profile?.organization_id) return;
+        const orgId = profile.organization_id;
+
+        // 1. Obtener nombre de la tienda
+        const { data: store } = await supabase.from('store_settings').select('name').eq('organization_id', orgId).single();
+        if (store) setStoreName(store.name);
+
+        // 2. Obtener ventas y cajas
+        const { data: salesData } = await supabase.from('sales').select('*').eq('organization_id', orgId).order('created_at', { ascending: false });
+        const { data: registersData } = await supabase.from('cash_registers').select('*').eq('organization_id', orgId);
+        
+        // 3. Obtener el detalle de productos
+        const { data: itemsData } = await supabase.from('sale_items').select('*, products(name)').eq('organization_id', orgId);
+
+        if (salesData && itemsData) {
+          // --- KPIs ---
+          const totalRev = salesData.reduce((acc, curr) => acc + (curr.total || 0), 0);
+          const totalItemsSold = itemsData.reduce((acc, curr) => acc + (curr.quantity || 0), 0);
+          
+          setStats({
+            totalRevenue: totalRev,
+            totalSales: salesData.length,
+            totalItems: totalItemsSold,
+            averageTicket: salesData.length > 0 ? (totalRev / salesData.length) : 0
+          });
+
+          setRecentSales(salesData.slice(0, 5));
+
+          // --- RANKING TOP PRODUCTOS (Para Gráfico de Barras) ---
+          const productCounts = {};
+          itemsData.forEach(item => {
+            const name = item.products?.name || 'Producto Eliminado';
+            productCounts[name] = (productCounts[name] || 0) + item.quantity;
+          });
+          
+          const sortedProducts = Object.entries(productCounts)
+            .map(([name, qty]) => ({ name, Cantidad: qty }))
+            .sort((a, b) => b.Cantidad - a.Cantidad)
+            .slice(0, 5); 
+          
+          setTopProducts(sortedProducts);
+
+          // --- VENTAS POR SUCURSAL/CAJA (Para Gráfico Circular) ---
+          const registerCounts = {};
+          salesData.forEach(sale => {
+            const prefix = sale.receipt_number ? sale.receipt_number.split('-')[0] : 'Sin N°';
+            registerCounts[prefix] = (registerCounts[prefix] || 0) + (sale.total || 0);
+          });
+
+          const sortedRegisters = Object.entries(registerCounts).map(([prefix, amount]) => {
+            const regInfo = registersData?.find(r => r.prefix === prefix);
+            return {
+              name: regInfo ? regInfo.name : (prefix === 'Sin N°' ? 'Ventas Antiguas' : `Caja ${prefix}`),
+              value: amount
+            };
+          }).sort((a, b) => b.value - a.value);
+
+          setSalesByRegister(sortedRegisters);
+        }
+      } catch (error) {
+        console.error("Error al cargar dashboard:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDashboardData();
   }, []);
 
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const { data: products, error } = await supabase.from('products').select('*');
-      if (error) throw error;
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center bg-gray-50"><p className="text-xl text-indigo-600 font-bold animate-pulse">Analizando métricas...</p></div>;
+  }
 
-      let invested = 0;
-      let potential = 0;
-      let lowStockCount = 0;
-
-      products.forEach(p => {
-        const qty = p.stock_current || 0;
-        const cost = p.cost_price || 0;
-        const price = p.price_sell || 0;
-
-        invested += (cost * qty);
-        potential += (price * qty);
-
-        if (qty < 5) lowStockCount++;
-      });
-
-      setInventoryList(products);
-      setFinancials({
-        totalInvested: invested,
-        totalPotential: potential,
-        potentialProfit: potential - invested,
-        stockCount: products.length,
-        lowStock: lowStockCount
-      });
-
-    } catch (error) {
-      console.error("Error dashboard:", error);
-    } finally {
-      setLoading(false);
+  // Personalización del Tooltip del gráfico circular para que muestre el signo $
+  const CustomTooltip = ({ active, payload }) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="bg-white p-3 border border-gray-200 shadow-lg rounded-lg">
+          <p className="font-bold text-gray-800">{payload[0].name}</p>
+          <p className="text-indigo-600 font-black">${payload[0].value.toFixed(2)}</p>
+        </div>
+      );
     }
-  };
-
-  const downloadExcel = () => {
-    const tableData = inventoryList.map(p => ({
-      "Producto": p.name,
-      "Código": p.barcode || "---",
-      "Stock": p.stock_current,
-      "Costo Unit.": p.cost_price || 0,
-      "Precio Venta": p.price_sell,
-      "Inversión ($)": (p.cost_price * p.stock_current) || 0,
-      "Venta Total ($)": (p.price_sell * p.stock_current) || 0,
-      "Ganancia ($)": ((p.price_sell - (p.cost_price || 0)) * p.stock_current) || 0
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(tableData, { origin: "A5" });
-
-    XLSX.utils.sheet_add_aoa(ws, [
-      ["REPORTE DE INVENTARIO - POS SYSTEM"],
-      ["Fecha de emisión:", new Date().toLocaleDateString()],
-      [""],
-      ["Detalle de Productos:"],
-    ], { origin: "A1" });
-
-    ws['!cols'] = [{ wch: 30 }, { wch: 15 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 15 }, { wch: 15 }];
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Inventario Valorizado");
-    XLSX.writeFile(wb, `Reporte_Financiero_${new Date().toISOString().slice(0,10)}.xlsx`);
+    return null;
   };
 
   return (
     <div className="p-4 md:p-8 bg-gray-100 min-h-screen">
-      
-      {/* CABECERA RESPONSIVE (Columna en móvil, Fila en PC) */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
-        <div>
-           <h1 className="text-2xl md:text-3xl font-bold text-gray-800">📊 Finanzas</h1>
-           <p className="text-gray-500 text-sm mt-1">Control de capital y ganancias</p>
+      <div className="mb-8">
+        <h1 className="text-3xl font-black text-gray-800">👋 Hola, {storeName}</h1>
+        <p className="text-gray-500 mt-1">Aquí tienes el resumen del rendimiento de tu negocio.</p>
+      </div>
+
+      {/* 1. TARJETAS DE MÉTRICAS (KPIs) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4 hover:shadow-md transition">
+          <div className="w-14 h-14 bg-green-100 text-green-600 rounded-full flex items-center justify-center text-2xl">💰</div>
+          <div>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Ingresos Totales</p>
+            <p className="text-2xl font-black text-gray-800">${stats.totalRevenue.toFixed(2)}</p>
+          </div>
         </div>
         
-        <div className="flex gap-2 w-full md:w-auto">
-            <button 
-              onClick={downloadExcel} 
-              className="flex-1 md:flex-none bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl font-bold flex justify-center items-center gap-2 shadow-md text-sm md:text-base"
-            >
-              📋 <span className="hidden md:inline">Exportar Excel</span>
-              <span className="md:hidden">Excel</span> {/* Texto corto en móvil */}
-            </button>
-            
-            <button 
-              onClick={fetchData} 
-              className="bg-white text-indigo-600 border border-indigo-200 px-4 py-2 rounded-xl font-bold hover:bg-indigo-50 transition shadow-sm"
-            >
-              🔄
-            </button>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4 hover:shadow-md transition">
+          <div className="w-14 h-14 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-2xl">🧾</div>
+          <div>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Ventas Emitidas</p>
+            <p className="text-2xl font-black text-gray-800">{stats.totalSales}</p>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4 hover:shadow-md transition">
+          <div className="w-14 h-14 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center text-2xl">📦</div>
+          <div>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Artículos Vendidos</p>
+            <p className="text-2xl font-black text-gray-800">{stats.totalItems}</p>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4 hover:shadow-md transition">
+          <div className="w-14 h-14 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center text-2xl">📊</div>
+          <div>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Ticket Promedio</p>
+            <p className="text-2xl font-black text-gray-800">${stats.averageTicket.toFixed(2)}</p>
+          </div>
         </div>
       </div>
 
-      {loading ? (
-        <div className="text-center py-20 text-gray-500 animate-pulse">Calculando finanzas...</div>
-      ) : (
-        <>
-          {/* TARJETAS DE DINERO */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8">
-            <div className="bg-white p-5 rounded-2xl shadow-sm border-l-4 border-blue-500">
-              <p className="text-gray-500 text-xs font-bold uppercase tracking-wide">Inversión (Costo)</p>
-              <h2 className="text-3xl font-black text-gray-800 mt-1">
-                ${financials.totalInvested.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-              </h2>
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl shadow-sm border-l-4 border-indigo-500">
-              <p className="text-gray-500 text-xs font-bold uppercase tracking-wide">Venta Total</p>
-              <h2 className="text-3xl font-black text-gray-800 mt-1">
-                ${financials.totalPotential.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-              </h2>
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl shadow-sm border-l-4 border-green-500">
-              <p className="text-gray-500 text-xs font-bold uppercase tracking-wide">Ganancia Estimada</p>
-              <h2 className="text-3xl font-black text-green-600 mt-1">
-                +${financials.potentialProfit.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-              </h2>
-            </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+        
+        {/* 2. GRÁFICO: TOP 5 PRODUCTOS */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 h-96 flex flex-col">
+          <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">🏆 Top 5 Productos Más Vendidos</h2>
+          <div className="flex-1 w-full h-full">
+            {topProducts.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-gray-400 italic">No hay datos suficientes.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={topProducts} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                  <XAxis dataKey="name" tick={{fontSize: 12}} tickLine={false} axisLine={false} />
+                  <YAxis allowDecimals={false} tick={{fontSize: 12}} tickLine={false} axisLine={false} />
+                  <Tooltip cursor={{fill: '#f3f4f6'}} contentStyle={{borderRadius: '10px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
+                  <Bar dataKey="Cantidad" fill="#4f46e5" radius={[4, 4, 0, 0]} barSize={40}>
+                    {topProducts.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
+        </div>
 
-          {/* ALERTA DE STOCK RESPONSIVE */}
-          {financials.lowStock > 0 ? (
-             <div className="bg-red-50 border border-red-200 rounded-xl p-4 md:p-6 flex flex-col md:flex-row justify-between items-center gap-4 animate-fadeIn">
-                <div className="flex items-center gap-4 w-full">
-                    <span className="text-3xl">🚨</span>
-                    <div>
-                        <h3 className="text-red-800 font-bold text-lg">Stock Crítico</h3>
-                        <p className="text-red-600 text-sm">Tienes {financials.lowStock} productos por agotar.</p>
-                    </div>
-                </div>
-                <button 
-                  onClick={() => navigate('/inventory')} 
-                  className="w-full md:w-auto text-center bg-white border border-red-200 text-red-700 font-bold py-2 px-4 rounded-lg text-sm hover:bg-red-50"
-                >
-                    Ver Inventario
-                </button>
-             </div>
+        {/* 3. GRÁFICO: INGRESOS POR SUCURSAL/CAJA */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 h-96 flex flex-col">
+          <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">🏧 Ingresos por Sucursal</h2>
+          <div className="flex-1 w-full h-full">
+            {salesByRegister.length === 0 ? (
+               <div className="flex items-center justify-center h-full text-gray-400 italic">No hay datos suficientes.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={salesByRegister}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={80}
+                    outerRadius={110}
+                    paddingAngle={5}
+                    dataKey="value"
+                  >
+                    {salesByRegister.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend verticalAlign="bottom" height={36} iconType="circle" />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+      </div>
+
+      {/* 4. ÚLTIMAS VENTAS */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+          <h2 className="text-lg font-bold text-gray-800">⚡ Ventas Recientes</h2>
+        </div>
+        <div className="divide-y divide-gray-100">
+          {recentSales.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">No hay ventas registradas todavía.</div>
           ) : (
-            <div className="bg-green-50 border border-green-200 rounded-xl p-6 flex items-center gap-4">
-                <span className="text-3xl">✅</span>
-                <div>
-                    <h3 className="text-green-800 font-bold text-lg">Todo Correcto</h3>
-                    <p className="text-green-600 text-sm">Inventario saludable.</p>
+            recentSales.map((sale) => (
+              <div key={sale.id} className="p-4 md:p-6 flex justify-between items-center hover:bg-indigo-50 transition cursor-default group">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-white border border-gray-100 shadow-sm rounded-full flex items-center justify-center text-xl group-hover:scale-110 transition">🧾</div>
+                  <div>
+                    <p className="text-sm font-bold text-indigo-700">{sale.receipt_number || "Ticket Antiguo"}</p>
+                    <p className="text-xs text-gray-500 font-medium">{new Date(sale.created_at).toLocaleString()}</p>
+                  </div>
                 </div>
-            </div>
+                <div className="text-right font-black text-gray-800 text-lg">
+                  ${(sale.total || 0).toFixed(2)}
+                </div>
+              </div>
+            ))
           )}
-        </>
-      )}
+        </div>
+      </div>
+
     </div>
   );
 };
