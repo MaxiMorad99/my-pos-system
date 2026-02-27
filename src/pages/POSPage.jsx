@@ -2,20 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 
 const POSPage = () => {
-  // Estados de Datos
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [storeData, setStoreData] = useState(null);
   const [orgId, setOrgId] = useState(null); 
   
-  // Estados de Carrito y Filtros
   const [cart, setCart] = useState([]);
   const [total, setTotal] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState(null); 
   const [selectedSubCategory, setSelectedSubCategory] = useState(null); 
 
-  // --- 1. CARGA INICIAL ---
   useEffect(() => {
     const initPOS = async () => {
       try {
@@ -40,14 +37,12 @@ const POSPage = () => {
     initPOS();
   }, []);
 
-  // --- 2. CALCULAR TOTAL ---
   useEffect(() => {
     const newTotal = cart.reduce((acc, item) => acc + (item.price_sell * item.quantity), 0);
     setTotal(newTotal);
   }, [cart]);
 
   const fetchData = async (organizationId) => {
-    // 1. Datos de la Tienda (para el ticket)
     const { data: store } = await supabase
       .from('store_settings')
       .select('*')
@@ -55,7 +50,6 @@ const POSPage = () => {
       .single();
     if (store) setStoreData(store);
 
-    // 2. Categorías
     const { data: cats } = await supabase
       .from('categories')
       .select('*')
@@ -63,7 +57,6 @@ const POSPage = () => {
       .order('name');
     if (cats) setCategories(cats);
 
-    // 3. Productos 
     const { data: prods } = await supabase
       .from('products')
       .select('*, categories(id, parent_id)') 
@@ -74,7 +67,6 @@ const POSPage = () => {
     if (prods) setProducts(prods);
   };
 
-  // --- LÓGICA DEL CARRITO ---
   const addToCart = (product) => {
     const existing = cart.find(item => item.id === product.id);
     if (existing) {
@@ -97,13 +89,13 @@ const POSPage = () => {
     setCart(cart.map(item => item.id === id ? { ...item, quantity: newQuantity } : item));
   };
 
-  // --- COBRAR Y GENERAR NÚMERO DE TICKET ---
+  // --- COBRAR (AHORA SÍ CON CONTROL DE ERRORES Y EMPRESA) ---
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     if (!orgId) return alert("Error de seguridad: No se detectó tu empresa."); 
 
     try {
-      // 1. Guardar Venta
+      // 1. Guardar Venta General
       const { data: saleData, error: saleError } = await supabase
         .from('sales')
         .insert([{ 
@@ -115,19 +107,20 @@ const POSPage = () => {
 
       if (saleError) throw saleError;
 
-      // 2. Guardar Items (AHORA CON ORGANIZACIÓN Y CONTROL DE ERRORES)
+      // 2. Guardar Items de la Venta (AQUÍ ESTABA EL FANTASMA)
       for (const item of cart) {
         const { error: itemError } = await supabase.from('sale_items').insert([{
           sale_id: saleData.id,
           product_id: item.id,
           quantity: item.quantity,
           price: item.price_sell,
-          organization_id: orgId // <--- ESTO FALTABA PARA QUE NO LOS RECHACE
+          organization_id: orgId // <--- EL DATO QUE FALTABA
         }]);
 
+        // Si falla, ahora sí nos enteraremos
         if (itemError) {
-          console.error("Error guardando detalle:", itemError);
-          throw new Error("No se pudo guardar un producto: " + itemError.message);
+          console.error("Error guardando producto:", itemError);
+          throw new Error(`No se pudo guardar ${item.name}: ${itemError.message}`);
         }
 
         const currentProduct = products.find(p => p.id === item.id);
@@ -135,7 +128,7 @@ const POSPage = () => {
         await supabase.from('products').update({ stock_current: newStock }).eq('id', item.id);
       }
 
-      // 3. Contar ventas y generar ticket
+      // 3. Contar ventas de tu empresa para el N° de Comprobante
       const { count } = await supabase
         .from('sales')
         .select('*', { count: 'exact', head: true })
@@ -149,13 +142,12 @@ const POSPage = () => {
       alert('¡Venta Exitosa!');
 
     } catch (error) {
-      alert('Error al cobrar: ' + error.message);
+      alert('Error crítico al cobrar: ' + error.message);
     }
   };
 
-  // --- GENERADOR DE TICKET TÉRMICO PROFESIONAL ---
-  const handlePrint = (saleId) => {
-    // Extraemos los datos de la tienda, con valores por defecto si faltan
+  // --- IMPRIMIR RECIBO (NUEVO FORMATO AFIP) ---
+  const handlePrint = (sequentialNum) => {
     const storeName = storeData?.name || "MI TIENDA";
     const legalName = storeData?.legal_name || storeName;
     const cuit = storeData?.cuit || "00-00000000-0";
@@ -163,11 +155,13 @@ const POSPage = () => {
     const address = storeData?.address || "Dirección no configurada";
     const phone = storeData?.phone || "Sin teléfono";
     
-    // Generamos un N° de Ticket basado en la fecha (Ej: 20260226-0012)
+    const posNumber = "0001"; 
+    const invoiceNumber = String(sequentialNum).padStart(8, '0');
+    const ticketNumber = `${posNumber}-${invoiceNumber}`;
+
     const now = new Date();
     const dateString = now.toLocaleDateString();
     const timeString = now.toLocaleTimeString();
-    const ticketNumber = `${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}-${saleId.toString().padStart(4, '0')}`;
 
     const printWindow = window.open('', '', 'width=350,height=600');
     printWindow.document.write(`
@@ -175,7 +169,6 @@ const POSPage = () => {
         <head>
           <title>Ticket #${ticketNumber}</title>
           <style>
-            /* Estilos optimizados para impresora térmica de 80mm */
             @page { margin: 0; }
             body { 
               font-family: 'Courier New', Courier, monospace; 
@@ -244,7 +237,7 @@ const POSPage = () => {
             ¡Gracias por su compra!
           </div>
           <div class="text-center" style="margin-top: 5px; font-size: 10px;">
-            Documento válido como remito interno.
+            Documento interno válido como remito.
           </div>
           
           <script>
@@ -259,7 +252,6 @@ const POSPage = () => {
     printWindow.document.close();
   };
 
-  // --- FILTRADO INTELIGENTE ---
   const filteredProducts = products.filter(p => {
     const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           (p.barcode && p.barcode.includes(searchTerm));
@@ -281,7 +273,6 @@ const POSPage = () => {
       {/* IZQUIERDA: PRODUCTOS Y FILTROS */}
       <div className="w-full md:w-2/3 flex flex-col h-1/2 md:h-full">
         
-        {/* BARRA SUPERIOR: Buscador + Categorías */}
         <div className="bg-white p-4 shadow-sm z-10">
           <input 
             type="text" 
