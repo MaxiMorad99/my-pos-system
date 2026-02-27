@@ -55,6 +55,7 @@ const SalesPage = () => {
           id, 
           created_at, 
           total, 
+          receipt_number,
           sale_items (
             quantity,
             price,
@@ -82,9 +83,9 @@ const SalesPage = () => {
     const address = storeData?.address || "Dirección no configurada";
     const phone = storeData?.phone || "Sin teléfono";
 
-    // Generamos un falso número de ticket secuencial extrayendo números del ID real para mantener el formato visual
-    const onlyNumbersId = sale.id.replace(/\D/g, '').slice(0, 8).padStart(8, '0');
-    const ticketNumber = `0001-${onlyNumbersId}`;
+    // AHORA LEEMOS EL NÚMERO DIRECTO DE LA VENTA
+    // Si es una venta vieja que no tiene número, le ponemos uno por defecto
+    const ticketNumber = sale.receipt_number || "0001-000000000";
 
     const date = new Date(sale.created_at);
     const dateString = date.toLocaleDateString();

@@ -89,54 +89,55 @@ const POSPage = () => {
     setCart(cart.map(item => item.id === id ? { ...item, quantity: newQuantity } : item));
   };
 
-  // --- COBRAR (AHORA SÍ CON CONTROL DE ERRORES Y EMPRESA) ---
+// --- COBRAR Y GENERAR NÚMERO DE TICKET ---
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     if (!orgId) return alert("Error de seguridad: No se detectó tu empresa."); 
 
     try {
-      // 1. Guardar Venta General
+      // 1. Calcular el N° de Comprobante ANTES de guardar la venta
+      const { count } = await supabase
+        .from('sales')
+        .select('*', { count: 'exact', head: true })
+        .eq('organization_id', orgId);
+
+      // Generamos el formato XXXX-XXXXXXXXX (Caja 0001 por defecto ahora)
+      const sequentialNum = (count || 0) + 1;
+      const posNumber = "0001"; // N° de Caja
+      const invoiceNumber = String(sequentialNum).padStart(9, '0'); // 9 dígitos
+      const finalReceiptNumber = `${posNumber}-${invoiceNumber}`;
+
+      // 2. Guardar Venta General (AHORA GUARDAMOS EL N° DE TICKET)
       const { data: saleData, error: saleError } = await supabase
         .from('sales')
         .insert([{ 
           total: total,
-          organization_id: orgId 
+          organization_id: orgId,
+          receipt_number: finalReceiptNumber // <--- LO GUARDAMOS EN LA DB
         }]) 
         .select()
         .single();
 
       if (saleError) throw saleError;
 
-      // 2. Guardar Items de la Venta (AQUÍ ESTABA EL FANTASMA)
+      // 3. Guardar Items de la Venta
       for (const item of cart) {
         const { error: itemError } = await supabase.from('sale_items').insert([{
           sale_id: saleData.id,
           product_id: item.id,
           quantity: item.quantity,
           price: item.price_sell,
-          organization_id: orgId // <--- EL DATO QUE FALTABA
+          organization_id: orgId 
         }]);
 
-        // Si falla, ahora sí nos enteraremos
-        if (itemError) {
-          console.error("Error guardando producto:", itemError);
-          throw new Error(`No se pudo guardar ${item.name}: ${itemError.message}`);
-        }
+        if (itemError) throw new Error(`No se pudo guardar ${item.name}: ${itemError.message}`);
 
         const currentProduct = products.find(p => p.id === item.id);
         const newStock = currentProduct.stock_current - item.quantity;
         await supabase.from('products').update({ stock_current: newStock }).eq('id', item.id);
       }
-
-      // 3. Contar ventas de tu empresa para el N° de Comprobante
-      const { count } = await supabase
-        .from('sales')
-        .select('*', { count: 'exact', head: true })
-        .eq('organization_id', orgId);
-
-      const sequentialNum = count || 1;
       
-      handlePrint(sequentialNum); 
+      handlePrint(finalReceiptNumber); // Le pasamos el número exacto
       setCart([]);
       fetchData(orgId); 
       alert('¡Venta Exitosa!');
@@ -147,17 +148,13 @@ const POSPage = () => {
   };
 
   // --- IMPRIMIR RECIBO (NUEVO FORMATO AFIP) ---
-  const handlePrint = (sequentialNum) => {
+  const handlePrint = (ticketNumber) => { // <-- Ahora recibe el ticketNumber ya armado
     const storeName = storeData?.name || "MI TIENDA";
     const legalName = storeData?.legal_name || storeName;
     const cuit = storeData?.cuit || "00-00000000-0";
     const taxCat = storeData?.tax_category || "Consumidor Final";
     const address = storeData?.address || "Dirección no configurada";
     const phone = storeData?.phone || "Sin teléfono";
-    
-    const posNumber = "0001"; 
-    const invoiceNumber = String(sequentialNum).padStart(8, '0');
-    const ticketNumber = `${posNumber}-${invoiceNumber}`;
 
     const now = new Date();
     const dateString = now.toLocaleDateString();
@@ -170,15 +167,7 @@ const POSPage = () => {
           <title>Ticket #${ticketNumber}</title>
           <style>
             @page { margin: 0; }
-            body { 
-              font-family: 'Courier New', Courier, monospace; 
-              width: 80mm; 
-              margin: 0 auto; 
-              padding: 5mm; 
-              font-size: 12px; 
-              line-height: 1.2;
-              color: #000;
-            }
+            body { font-family: 'Courier New', Courier, monospace; width: 80mm; margin: 0 auto; padding: 5mm; font-size: 12px; line-height: 1.2; color: #000; }
             .text-center { text-align: center; }
             .text-left { text-align: left; }
             .text-right { text-align: right; }
@@ -233,18 +222,11 @@ const POSPage = () => {
           
           <div class="divider"></div>
           
-          <div class="text-center" style="margin-top: 15px;">
-            ¡Gracias por su compra!
-          </div>
-          <div class="text-center" style="margin-top: 5px; font-size: 10px;">
-            Documento interno válido como remito.
-          </div>
+          <div class="text-center" style="margin-top: 15px;">¡Gracias por su compra!</div>
+          <div class="text-center" style="margin-top: 5px; font-size: 10px;">Documento interno válido como remito.</div>
           
           <script>
-            window.onload = function() {
-              window.print();
-              setTimeout(function(){ window.close(); }, 500);
-            }
+            window.onload = function() { window.print(); setTimeout(function(){ window.close(); }, 500); }
           </script>
         </body>
       </html>
