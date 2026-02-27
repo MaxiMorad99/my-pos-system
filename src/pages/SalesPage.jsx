@@ -55,14 +55,14 @@ const SalesPage = () => {
           id, 
           created_at, 
           total, 
-          receipt_number,
+          receipt_number, -- <--- FUNDAMENTAL: Traer el numero guardado
           sale_items (
             quantity,
             price,
             products (name)
           )
         `)
-        .eq('organization_id', organizationId) // <-- Filtro de seguridad
+        .eq('organization_id', organizationId)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -85,7 +85,7 @@ const SalesPage = () => {
 
     // AHORA LEEMOS EL NÚMERO DIRECTO DE LA VENTA
     // Si es una venta vieja que no tiene número, le ponemos uno por defecto
-    const ticketNumber = sale.receipt_number || "0001-000000000";
+    const ticketNumber = sale.receipt_number || `0001-${sale.id.replace(/\D/g, '').slice(0, 9).padStart(9, '0')}`;
 
     const date = new Date(sale.created_at);
     const dateString = date.toLocaleDateString();
